@@ -12083,6 +12083,7 @@ var Cursor = class extends Component {
   _isDown = false;
   _lastIsDown = false;
   _arTouchDown = false;
+  _lastPointerPos = new Float32Array(2);
   _lastCursorPosOnTarget = new Float32Array(3);
   _cursorRayScale = new Float32Array(3);
   _hitTestLocation = null;
@@ -12093,8 +12094,6 @@ var Cursor = class extends Component {
    * that matches the collision group
    */
   visible = true;
-  /** Maximum distance for the cursor's ray cast */
-  maxDistance = 100;
   /** Currently hovered object */
   hoveringObject = null;
   /** CursorTarget component of the currently hovered object */
@@ -12131,6 +12130,8 @@ var Cursor = class extends Component {
   handedness = 0;
   /** Mode for raycasting, whether to use PhysX or simple collision components */
   rayCastMode = 0;
+  /** Maximum distance for the cursor's ray cast. */
+  maxDistance = 100;
   /** Whether to set the CSS style of the mouse cursor on desktop */
   styleCursor = true;
   /**
@@ -12189,12 +12190,6 @@ var Cursor = class extends Component {
       });
     }
     this._onViewportResize();
-    this.object.getTranslationWorld(this._origin);
-    this.object.getForward(this._direction);
-    if (this.cursorRayObject) {
-      this._cursorRayScale.set(this.cursorRayObject.scalingLocal);
-      this._setCursorRayTransform(vec3_exports.add(tempVec2, this._origin, this._direction));
-    }
   }
   _setCursorRayTransform(hitPosition) {
     if (!this.cursorRayObject)
@@ -12214,10 +12209,9 @@ var Cursor = class extends Component {
     if (!this.cursorObject)
       return;
     if (visible) {
-      this.cursorObject.resetScaling();
-      this.cursorObject.scale(this._cursorObjScale);
+      this.cursorObject.setScalingWorld(this._cursorObjScale);
     } else {
-      this._cursorObjScale.set(this.cursorObject.scalingLocal);
+      this.cursorObject.getScalingLocal(this._cursorObjScale);
       this.cursorObject.scale([0, 0, 0]);
     }
   }
@@ -12227,10 +12221,14 @@ var Cursor = class extends Component {
       this._direction[0] = p[0];
       this._direction[1] = -p[1];
       this._direction[2] = -1;
+      this.applyTransformAndProjectDirection();
+    } else if (this.engine.xr && this._input && this._input.xrInputSource) {
+      this._direction[0] = 0;
+      this._direction[1] = 0;
+      this._direction[2] = -1;
+      this.applyTransformToDirection();
+    } else if (this._viewComponent) {
       this.updateDirection();
-    } else {
-      this.object.getTranslationWorld(this._origin);
-      this.object.getForwardWorld(this._direction);
     }
     this.rayCast(null, this.engine.xr?.frame);
     if (this.cursorObject) {
@@ -12288,19 +12286,21 @@ var Cursor = class extends Component {
     }
     if (hit) {
       if (this.hoveringObject) {
-        this.hoveringObject.toLocalSpaceTransform(tempVec2, this.cursorPos);
+        this.hoveringObject.transformPointInverseWorld(tempVec2, this.cursorPos);
       } else {
         tempVec2.set(this.cursorPos);
       }
-      if (this._lastCursorPosOnTarget[0] != tempVec2[0] || this._lastCursorPosOnTarget[1] != tempVec2[1] || this._lastCursorPosOnTarget[2] != tempVec2[2]) {
+      if (!vec3_exports.equals(this._lastCursorPosOnTarget, tempVec2)) {
         this.notify("onMove", originalEvent);
         this._lastCursorPosOnTarget.set(tempVec2);
       }
     } else if (this.hoveringReality) {
-      if (this._lastCursorPosOnTarget[0] != this.cursorPos[0] || this._lastCursorPosOnTarget[1] != this.cursorPos[1] || this._lastCursorPosOnTarget[2] != this.cursorPos[2]) {
+      if (!vec3_exports.equals(this._lastCursorPosOnTarget, this.cursorPos)) {
         this.hitTestTarget.onMove.notify(hitTestResult, this, originalEvent ?? void 0);
         this._lastCursorPosOnTarget.set(this.cursorPos);
       }
+    } else {
+      this._lastCursorPosOnTarget.set(this.cursorPos);
     }
     this._lastIsDown = this._isDown;
   }
@@ -12398,19 +12398,27 @@ var Cursor = class extends Component {
    * @returns @ref WL.RayHit for new position.
    */
   updateMousePos(e) {
-    const bounds = this.engine.canvas.getBoundingClientRect();
-    const left = e.clientX / bounds.width;
-    const top = e.clientY / bounds.height;
-    this._direction[0] = left * 2 - 1;
-    this._direction[1] = -top * 2 + 1;
-    this._direction[2] = -1;
+    this._lastPointerPos[0] = e.clientX;
+    this._lastPointerPos[1] = e.clientY;
     this.updateDirection();
   }
   updateDirection() {
-    this.object.getTranslationWorld(this._origin);
+    const bounds = this.engine.canvas.getBoundingClientRect();
+    const left = this._lastPointerPos[0] / bounds.width;
+    const top = this._lastPointerPos[1] / bounds.height;
+    this._direction[0] = left * 2 - 1;
+    this._direction[1] = -top * 2 + 1;
+    this._direction[2] = -1;
+    this.applyTransformAndProjectDirection();
+  }
+  applyTransformAndProjectDirection() {
     vec3_exports.transformMat4(this._direction, this._direction, this._projectionMatrix);
     vec3_exports.normalize(this._direction, this._direction);
+    this.applyTransformToDirection();
+  }
+  applyTransformToDirection() {
     vec3_exports.transformQuat(this._direction, this._direction, this.object.transformWorld);
+    this.object.getTranslationWorld(this._origin);
   }
   rayCast(originalEvent, frame = null, doClick = false) {
     const rayHit = this.rayCastMode == 0 ? this.engine.scene.rayCast(this._origin, this._direction, this._collisionMask) : this.engine.physics.rayCast(this._origin, this._direction, this._collisionMask, this.maxDistance);
@@ -12465,6 +12473,9 @@ __decorate4([
 __decorate4([
   property.enum(["collision", "physx"], "collision")
 ], Cursor.prototype, "rayCastMode", void 0);
+__decorate4([
+  property.float(100)
+], Cursor.prototype, "maxDistance", void 0);
 __decorate4([
   property.bool(true)
 ], Cursor.prototype, "styleCursor", void 0);
@@ -12952,10 +12963,23 @@ __publicField(MouseLookComponent, "Properties", {
 });
 
 // node_modules/@wonderlandengine/components/dist/player-height.js
+var __decorate6 = function(decorators, target, key, desc) {
+  var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+  if (typeof Reflect === "object" && typeof Reflect.decorate === "function")
+    r = Reflect.decorate(decorators, target, key, desc);
+  else
+    for (var i = decorators.length - 1; i >= 0; i--)
+      if (d = decorators[i])
+        r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+  return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
 var PlayerHeight = class extends Component {
+  height = 1.75;
+  onSessionStartCallback;
+  onSessionEndCallback;
   start() {
-    this.object.resetTranslationRotation();
-    this.object.translate([0, this.height, 0]);
+    this.object.resetPositionRotation();
+    this.object.translateLocal([0, this.height, 0]);
     this.onSessionStartCallback = this.onXRSessionStart.bind(this);
     this.onSessionEndCallback = this.onXRSessionEnd.bind(this);
   }
@@ -12968,21 +12992,23 @@ var PlayerHeight = class extends Component {
     this.engine.onXRSessionEnd.remove(this.onSessionEndCallback);
   }
   onXRSessionStart() {
-    if (!["local", "viewer"].includes(this.engine.xr.currentReferenceSpace)) {
-      this.object.resetTranslationRotation();
+    const type = this.engine.xr?.currentReferenceSpaceType;
+    if (type !== "local" && type !== "viewer") {
+      this.object.resetPositionRotation();
     }
   }
   onXRSessionEnd() {
-    if (!["local", "viewer"].includes(this.engine.xr.currentReferenceSpace)) {
-      this.object.resetTranslationRotation();
-      this.object.translate([0, this.height, 0]);
+    const type = this.engine.xr?.currentReferenceSpaceType;
+    if (type !== "local" && type !== "viewer") {
+      this.object.resetPositionRotation();
+      this.object.translateLocal([0, this.height, 0]);
     }
   }
 };
 __publicField(PlayerHeight, "TypeName", "player-height");
-__publicField(PlayerHeight, "Properties", {
-  height: { type: Type.Float, default: 1.75 }
-});
+__decorate6([
+  property.float(1.75)
+], PlayerHeight.prototype, "height", void 0);
 
 // node_modules/@wonderlandengine/components/dist/target-framerate.js
 var TargetFramerate = class extends Component {
@@ -13349,114 +13375,105 @@ __publicField(Trail, "Properties", {
 });
 
 // node_modules/@wonderlandengine/components/dist/two-joint-ik-solver.js
-Math.clamp = function(v, a, b) {
+function clamp(v, a, b) {
   return Math.max(a, Math.min(v, b));
-};
+}
+var rootScaling = new Float32Array(3);
+var tempQuat3 = new Float32Array(4);
+var middlePos = new Float32Array(3);
+var endPos = new Float32Array(3);
+var targetPos = new Float32Array(3);
+var helperPos = new Float32Array(3);
+var rootTransform = new Float32Array(8);
+var middleTransform = new Float32Array(8);
+var endTransform = new Float32Array(8);
 var twoJointIK = function() {
-  let ta = new Float32Array(3);
-  let ca = new Float32Array(3);
-  let ba = new Float32Array(3);
-  let ab = new Float32Array(3);
-  let cb = new Float32Array(3);
-  let axis0 = new Float32Array(3);
-  let axis1 = new Float32Array(3);
-  let temp = new Float32Array(4);
-  let r0 = new Float32Array(4);
-  let r1 = new Float32Array(4);
-  let r2 = new Float32Array(4);
-  return function(a_lr, b_lr, a, b, c, t, eps, a_gr, b_gr, helper) {
-    vec3_exports.sub(ba, b, a);
+  const ta = new Float32Array(3);
+  const ca = new Float32Array(3);
+  const ba = new Float32Array(3);
+  const ab = new Float32Array(3);
+  const cb = new Float32Array(3);
+  const axis0 = new Float32Array(3);
+  const axis1 = new Float32Array(3);
+  const temp = new Float32Array(3);
+  return function(root, middle, b, c, targetPos2, eps, helper) {
+    ba.set(b);
     const lab = vec3_exports.length(ba);
     vec3_exports.sub(ta, b, c);
     const lcb = vec3_exports.length(ta);
-    vec3_exports.sub(ta, t, a);
-    const lat = Math.clamp(vec3_exports.length(ta), eps, lab + lcb - eps);
-    vec3_exports.sub(ca, c, a);
-    vec3_exports.sub(ab, a, b);
+    ta.set(targetPos2);
+    const lat = clamp(vec3_exports.length(ta), eps, lab + lcb - eps);
+    ca.set(c);
+    vec3_exports.scale(ab, b, -1);
     vec3_exports.sub(cb, c, b);
     vec3_exports.normalize(ca, ca);
     vec3_exports.normalize(ba, ba);
     vec3_exports.normalize(ab, ab);
     vec3_exports.normalize(cb, cb);
     vec3_exports.normalize(ta, ta);
-    const ac_ab_0 = Math.acos(Math.clamp(vec3_exports.dot(ca, ba), -1, 1));
-    const ba_bc_0 = Math.acos(Math.clamp(vec3_exports.dot(ab, cb), -1, 1));
-    const ac_at_0 = Math.acos(Math.clamp(vec3_exports.dot(ca, ta), -1, 1));
-    const ac_ab_1 = Math.acos(Math.clamp((lcb * lcb - lab * lab - lat * lat) / (-2 * lab * lat), -1, 1));
-    const ba_bc_1 = Math.acos(Math.clamp((lat * lat - lab * lab - lcb * lcb) / (-2 * lab * lcb), -1, 1));
-    vec3_exports.sub(ca, c, a);
-    vec3_exports.sub(ba, b, a);
-    vec3_exports.sub(ta, t, a);
-    vec3_exports.cross(axis0, ca, ba);
-    vec3_exports.cross(axis1, ca, ta);
+    const ac_ab_0 = Math.acos(clamp(vec3_exports.dot(ca, ba), -1, 1));
+    const ba_bc_0 = Math.acos(clamp(vec3_exports.dot(ab, cb), -1, 1));
+    const ac_at_0 = Math.acos(clamp(vec3_exports.dot(ca, ta), -1, 1));
+    const ac_ab_1 = Math.acos(clamp((lcb * lcb - lab * lab - lat * lat) / (-2 * lab * lat), -1, 1));
+    const ba_bc_1 = Math.acos(clamp((lat * lat - lab * lab - lcb * lcb) / (-2 * lab * lcb), -1, 1));
     if (helper) {
       vec3_exports.sub(ba, helper, b);
-      vec3_exports.transformQuat(ba, [0, 0, -1], b_gr);
-    } else {
-      vec3_exports.sub(ba, b, a);
+      vec3_exports.normalize(ba, ba);
     }
-    const l = vec3_exports.length(axis0);
-    if (l == 0) {
-      axis0.set([1, 0, 0]);
-    } else {
-      vec3_exports.scale(axis0, axis0, 1 / l);
-    }
+    vec3_exports.cross(axis0, ca, ba);
+    vec3_exports.normalize(axis0, axis0);
+    vec3_exports.cross(axis1, c, targetPos2);
     vec3_exports.normalize(axis1, axis1);
-    quat_exports.conjugate(a_gr, a_gr);
-    quat_exports.setAxisAngle(r0, vec3_exports.transformQuat(temp, axis0, a_gr), ac_ab_1 - ac_ab_0);
-    quat_exports.setAxisAngle(r2, vec3_exports.transformQuat(temp, axis1, a_gr), ac_at_0);
-    quat_exports.mul(a_lr, a_lr, quat_exports.mul(temp, r0, r2));
-    quat_exports.normalize(a_lr, a_lr);
-    quat_exports.conjugate(b_gr, b_gr);
-    quat_exports.setAxisAngle(r1, vec3_exports.transformQuat(temp, axis0, b_gr), ba_bc_1 - ba_bc_0);
-    quat_exports.mul(b_lr, b_lr, r1);
-    quat_exports.normalize(b_lr, b_lr);
+    middle.transformVectorInverseLocal(temp, axis0);
+    root.rotateAxisAngleRadObject(axis1, ac_at_0);
+    root.rotateAxisAngleRadObject(axis0, ac_ab_1 - ac_ab_0);
+    middle.rotateAxisAngleRadObject(axis0, ba_bc_1 - ba_bc_0);
   };
 }();
 var TwoJointIkSolver = class extends Component {
-  init() {
-    this.pos = new Float32Array(3 * 7);
-    this.p = [
-      this.pos.subarray(0, 3),
-      this.pos.subarray(3, 6),
-      this.pos.subarray(6, 9),
-      this.pos.subarray(9, 12),
-      this.pos.subarray(12, 15),
-      this.pos.subarray(15, 18),
-      this.pos.subarray(18, 21)
-    ];
+  time = 0;
+  start() {
+    this.root.getTransformLocal(rootTransform);
+    this.middle.getTransformLocal(middleTransform);
+    this.end.getTransformLocal(endTransform);
   }
-  update() {
-    const p = this.p;
-    this.root.getTranslationWorld(p[0]);
-    this.middle.getTranslationWorld(p[1]);
-    this.end.getTranslationWorld(p[2]);
-    this.target.getTranslationWorld(p[3]);
-    const tla = p[4];
-    const tlb = p[5];
-    this.root.getTranslationLocal(tla);
-    this.middle.getTranslationLocal(tlb);
-    if (this.helper)
-      this.helper.getTranslationWorld(p[6]);
-    twoJointIK(this.root.transformLocal, this.middle.transformLocal, p[0], p[1], p[2], p[3], 0.01, this.root.transformWorld.subarray(0, 4), this.middle.transformWorld.subarray(0, 4), this.helper ? p[6] : null);
-    this.root.setTranslationLocal(tla);
-    this.middle.setTranslationLocal(tlb);
-    this.root.setDirty();
-    this.middle.setDirty();
+  update(dt) {
+    this.time += dt;
+    this.root.setTransformLocal(rootTransform);
+    this.middle.setTransformLocal(middleTransform);
+    this.end.setTransformLocal(endTransform);
+    this.root.getScalingWorld(rootScaling);
+    this.middle.getPositionLocal(middlePos);
+    this.end.getPositionLocal(endPos);
+    this.middle.transformPointLocal(endPos, endPos);
+    if (this.helper) {
+      this.helper.getPositionWorld(helperPos);
+      this.root.transformPointInverseWorld(helperPos, helperPos);
+      vec3_exports.div(helperPos, helperPos, rootScaling);
+    }
+    this.target.getPositionWorld(targetPos);
+    this.root.transformPointInverseWorld(targetPos, targetPos);
+    vec3_exports.div(targetPos, targetPos, rootScaling);
+    twoJointIK(this.root, this.middle, middlePos, endPos, targetPos, 0.01, this.helper ? helperPos : null, this.time);
+    if (this.copyTargetRotation) {
+      this.end.setRotationWorld(this.target.getRotationWorld(tempQuat3));
+    }
   }
 };
 __publicField(TwoJointIkSolver, "TypeName", "two-joint-ik-solver");
 __publicField(TwoJointIkSolver, "Properties", {
   /** Root bone, never moves */
-  root: { type: Type.Object },
+  root: Property.object(),
   /** Bone attached to the root */
-  middle: { type: Type.Object },
+  middle: Property.object(),
   /** Bone attached to the middle */
-  end: { type: Type.Object },
+  end: Property.object(),
   /** Target the joins should reach for */
-  target: { type: Type.Object },
+  target: Property.object(),
+  /** Flag for copying rotation from target to end */
+  copyTargetRotation: Property.bool(true),
   /** Helper object to use to determine joint rotation axis */
-  helper: { type: Type.Object }
+  helper: Property.object()
 });
 
 // node_modules/@wonderlandengine/components/dist/video-texture.js
@@ -13588,7 +13605,7 @@ __publicField(VrModeActiveSwitch, "Properties", {
 
 // node_modules/@wonderlandengine/components/dist/plane-detection.js
 var import_earcut = __toESM(require_earcut(), 1);
-var __decorate6 = function(decorators, target, key, desc) {
+var __decorate7 = function(decorators, target, key, desc) {
   var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
   if (typeof Reflect === "object" && typeof Reflect.decorate === "function")
     r = Reflect.decorate(decorators, target, key, desc);
@@ -13754,10 +13771,10 @@ planeUpdatePose_fn = function(plane) {
   setXRRigidTransformLocal(o, pose.transform);
 };
 __publicField(PlaneDetection, "TypeName", "plane-detection");
-__decorate6([
+__decorate7([
   property.material()
 ], PlaneDetection.prototype, "planeMaterial", void 0);
-__decorate6([
+__decorate7([
   property.int()
 ], PlaneDetection.prototype, "collisionMask", void 0);
 
@@ -14307,6 +14324,7 @@ __publicField(Vrm, "Properties", {
 });
 
 // node_modules/@wonderlandengine/components/dist/wasd-controls.js
+var _direction = new Float32Array(3);
 var WasdControlsComponent = class extends Component {
   init() {
     this.up = false;
@@ -14320,20 +14338,25 @@ var WasdControlsComponent = class extends Component {
     this.headObject = this.headObject || this.object;
   }
   update() {
-    let direction2 = [0, 0, 0];
+    vec3_exports.zero(_direction);
     if (this.up)
-      direction2[2] -= 1;
+      _direction[2] -= 1;
     if (this.down)
-      direction2[2] += 1;
+      _direction[2] += 1;
     if (this.left)
-      direction2[0] -= 1;
+      _direction[0] -= 1;
     if (this.right)
-      direction2[0] += 1;
-    vec3_exports.normalize(direction2, direction2);
-    direction2[0] *= this.speed;
-    direction2[2] *= this.speed;
-    vec3_exports.transformQuat(direction2, direction2, this.headObject.transformWorld);
-    this.object.translate(direction2);
+      _direction[0] += 1;
+    vec3_exports.normalize(_direction, _direction);
+    _direction[0] *= this.speed;
+    _direction[2] *= this.speed;
+    vec3_exports.transformQuat(_direction, _direction, this.headObject.transformWorld);
+    if (this.lockY) {
+      _direction[1] = 0;
+      vec3_exports.normalize(_direction, _direction);
+      vec3_exports.scale(_direction, _direction, this.speed);
+    }
+    this.object.translateLocal(_direction);
   }
   press(e) {
     if (e.keyCode === 38 || e.keyCode === 87 || e.keyCode === 90) {
@@ -14362,6 +14385,8 @@ __publicField(WasdControlsComponent, "TypeName", "wasd-controls");
 __publicField(WasdControlsComponent, "Properties", {
   /** Movement speed in m/s. */
   speed: { type: Type.Float, default: 0.1 },
+  /** Flag for only moving the object on the global x & z planes */
+  lockY: { type: Type.Bool, default: false },
   /** Object of which the orientation is used to determine forward direction */
   headObject: { type: Type.Object }
 });
